@@ -31,6 +31,10 @@ class UsermodTemperature : public Usermod {
     bool parasite = false;
     // how often do we read from sensor?
     unsigned long readingInterval = USERMOD_DALLASTEMPERATURE_MEASUREMENT_INTERVAL;
+    // emergency shutdown temperature
+    int16_t shutdownTemp = -1;
+    // recovery from emergency threshold
+    uint16_t recoveryThreshold = 5;
     // set last reading as "40 sec before boot", so first reading is taken after 20 sec
     unsigned long lastMeasurement = UINT32_MAX - USERMOD_DALLASTEMPERATURE_MEASUREMENT_INTERVAL;
     // last time requestTemperatures was called
@@ -38,6 +42,8 @@ class UsermodTemperature : public Usermod {
     // we have to wait at least 93.75 ms after requestTemperatures() is called
     unsigned long lastTemperaturesRequest;
     float temperature;
+    float maxTemperature;
+    bool shutdown = false;
     // indicates requestTemperatures has been called but the sensor measurement is not complete
     bool waitingForConversion = false;
     // flag set at startup if DS18B20 sensor not found, avoids trying to keep getting
@@ -104,6 +110,15 @@ class UsermodTemperature : public Usermod {
       //DEBUG_PRINTF("Read temperature %2.1f.\n", temperature); // does not work properly on 8266
       DEBUG_PRINT(F("Read temperature "));
       DEBUG_PRINTLN(temperature);
+
+      if (temperature > maxTemperature) {
+        maxTemperature = temperature;
+      }
+      if (!shutdown && temperature >= shutdownTemp) {
+        shutdown = true;
+      } else if (shutdown && temperature < shutdownTemp - recoveryThreshold) {
+        shutdown = false;
+      }
     }
 
     bool findSensor() {
@@ -138,6 +153,7 @@ class UsermodTemperature : public Usermod {
       int retries = 10;
       sensorFound = 0;
       temperature = -127.0f; // default to -127, DS18B20 only goes down to -50C
+      maxTemperature = -127.0f;
       if (enabled) {
         // config says we are enabled
         DEBUG_PRINTLN(F("Allocating temperature pin..."));
@@ -215,6 +231,12 @@ class UsermodTemperature : public Usermod {
     inline float getTemperatureF() {
       return (float)temperature * 1.8f + 32;
     }
+    inline float getMaxTemperatureC() {
+      return (float)maxTemperature;
+    }
+    inline float getMaxTemperatureF() {
+      return (float)maxTemperature * 1.8f + 32;
+    }
 
     /*
      * addToJsonInfo() can be used to add custom entries to the /json/info part of the JSON API.
@@ -240,6 +262,14 @@ class UsermodTemperature : public Usermod {
       temp.add(degC ? getTemperatureC() : getTemperatureF());
       if (degC) temp.add(F("°C"));
       else      temp.add(F("°F"));
+
+      JsonArray maxTemp = user.createNestedArray("Max. Temperature");
+      maxTemp.add(degC ? getMaxTemperatureC() : getMaxTemperatureF());
+      if (degC) maxTemp.add(F("°C"));
+      else      maxTemp.add(F("°F"));
+
+      JsonArray shut = user.createNestedArray("Emergency Shutdown");
+      shut.add(shutdown ? "yes" : "no");
     }
 
     /**
@@ -270,6 +300,8 @@ class UsermodTemperature : public Usermod {
       top["degC"] = degC;  // usermodparam
       top[FPSTR(_readInterval)] = readingInterval / 1000;
       top[FPSTR(_parasite)] = parasite;
+      top["shutdown-temp"] = shutdownTemp;
+      top["recovery-thres"] = recoveryThreshold;
       DEBUG_PRINTLN(F("Temperature config saved."));
     }
 
@@ -295,6 +327,8 @@ class UsermodTemperature : public Usermod {
       readingInterval   = top[FPSTR(_readInterval)] | readingInterval/1000;
       readingInterval   = min(120,max(10,(int)readingInterval)) * 1000;  // convert to ms
       parasite          = top[FPSTR(_parasite)] | parasite;
+      shutdownTemp      = top["shutdown-temp"] | shutdownTemp;
+      recoveryThreshold = top["recovery-thres"] | recoveryThreshold;
 
       if (!initDone) {
         // first run: reading from cfg.json
@@ -314,12 +348,21 @@ class UsermodTemperature : public Usermod {
         }
       }
       // use "return !top["newestParameter"].isNull();" when updating Usermod with new features
-      return !top[FPSTR(_parasite)].isNull();
+      return !top["recovery-thres"].isNull();
     }
 
     uint16_t getId()
     {
       return USERMOD_ID_TEMPERATURE;
+    }
+
+    void handleOverlayDraw() override {
+      if (!enabled) {
+        return;
+      }
+      if (shutdown) {
+        strip.fill(0);
+      }
     }
 };
 
