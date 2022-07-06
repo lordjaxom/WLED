@@ -116,8 +116,14 @@ class UsermodTemperature : public Usermod {
       }
       if (!shutdown && temperature >= shutdownTemp) {
         shutdown = true;
+        if (bri > 0) {
+          toggleOnOff();
+        }
       } else if (shutdown && temperature < shutdownTemp - recoveryThreshold) {
         shutdown = false;
+        if (bri == 0 && briLast > 0) {
+          toggleOnOff();
+        }
       }
     }
 
@@ -354,15 +360,6 @@ class UsermodTemperature : public Usermod {
     uint16_t getId()
     {
       return USERMOD_ID_TEMPERATURE;
-    }
-
-    void handleOverlayDraw() override {
-      if (!enabled) {
-        return;
-      }
-      if (shutdown) {
-        strip.fill(0);
-      }
     }
 };
 
